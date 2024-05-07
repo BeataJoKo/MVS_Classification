@@ -1,0 +1,321 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup}
+rm(list=ls()) # clean env
+options(scipen=999) # seed randomness
+```
+
+```{r library, message=FALSE, warning=FALSE}
+library(tidyr)
+library(ggplot2)
+library(ggExtra)
+library(MASS)
+library(car)
+library(nnet)
+```
+
+
+```{r}
+data <- read.table('winequality-red.csv', sep=",", header=T, stringsAsFactors=T)
+```
+
+### Summary  of  the  data
+
+```{r}
+head(data)
+n <- nrow(data)  #n#
+p <- ncol(data)  #p#
+summary(data)
+```
+```{r}
+unique(data$fixed.acidity)
+unique(data$voltile.acidity)
+unique(data$citric.acid)
+unique(data$residual.sugar)
+unique(data$chlorides)
+unique(data$free.sulfur.dioxide)
+unique(data$total.sulfur.dioxide)
+unique(data$density)
+unique(data$pH)
+unique(data$sulphates)
+unique(data$alcohol)
+unique(data$quality)
+```
+```{r}
+data$label <- with(data, ifelse(quality >= 7, 'great', 
+                         ifelse(quality >= 5, 'good', 'poor')))
+```
+
+```{r}
+df <- data[,1:11]
+cat <- data[,13]
+```
+
+```{r}
+pairs(df)
+```
+
+```{r}
+colMeans(data[,1:12])
+mvec <- colMeans(df)   # sample mean vector
+covM <- cov(df)		     # sample covariance matrix
+corM <- cor(df)	       # sample correlation matrix
+det(cov(df))           # generalized sample variance
+sum(diag(cov(df)))     # total sample variance 
+```
+
+### Assessing univariate normality
+
+```{r}
+FindcrikChi <- function(n, p, alpha=0.5, N=1000){
+	
+	cricvec <- rep(0, N)  #vector for the rQ result collection#
+	
+	for(i in 1:N){
+		#iteration to estimate rQ#
+		numvec <- rchisq(n, p)  #generate a data set of size n, degree of freedom=p#
+		d <- sort(numvec)
+		q <- qchisq((1:n-0.5)/n, p)
+		cricvec[i] <- cor(d,q)		
+	}
+	
+	scricvec <- sort(cricvec)
+	cN <- ceiling(N* alpha) #to be on the safe side I use ceiling instead of floor(), take the 'worst' alpha*N cor as rQ, everything lower than that is deemed as rejection#
+	cricvalue <- scricvec[cN]
+	result <- list(cN, cricvalue, scricvec)
+	return(result)
+}
+
+critic <- FindcrikChi(n, p-1)
+```
+```{r}
+critic[[2]]
+```
+
+```{r}
+DensityPlots <- function(data_set){
+
+  for (col in names(data_set)){
+    print(mean(data_set[[col]]))
+    qqc <- qqnorm(data_set[[col]], main = paste("QQ - Plot: ", col))
+    corqq <- cor(qqc$x, qqc$y) 
+  
+    if (round(corqq,3) >= round(critic[[2]],3)){
+      qqline(data_set[[col]], col='blue', lwd=2)
+      print(paste('Data ', col, ' is Normally Distributed! with: ', round(corqq,3)))
+    } else {
+      qqline(data_set[[col]], col='orange', lwd=2)
+      print(paste('Data ', col, ' is NOT Normally Distributed! with: ', round(corqq,3)))
+    }
+  
+    for ( i in 1:ncol(data_set)){
+      if (col != names(data_set[i])){
+        j <- names(data_set[i])
+        df_mean <- as.data.frame(colMeans(data_set[c(col,  j)]))
+      
+        plot <- ggplot(data = data_set) + 
+          geom_point(mapping = aes(x = .data[[col]], y = .data[[j]])) +
+          geom_point(data=t(df_mean),  mapping=aes(x = .data[[col]], y = .data[[j]]), col="red")
+        print(ggMarginal(plot, type="densigram"))
+      
+      # or standard R
+      # plot(data_set[[col]], data_set[,i], col='blue', lwd=2, xlab=col, ylab=j)
+      # points(mean(data_set[[col]]), mean(data_set[,i]), col='red', lwd=8)
+      
+      print(paste(col, ' vs ', names(data_set[i]), ': ', 
+                  cov(data_set[[col]], data_set[,i])))
+
+    }
+  }
+  }
+}
+```
+
+```{r}
+DensityPlots(df)
+```
+
+
+### Transformation
+
+```{r}
+df_normal <- data.frame(matrix(nrow=n, ncol = 11))
+colnames(df_normal) <- names(df)
+
+normal <- c()
+not_normal <- c()
+for (col in names(df)){
+  tryCatch(
+        {
+        boxcoxTransc <- boxcox(df[[col]] ~ 1,lambda=seq(-2.5, 2.5,.01))
+        title(col)
+  
+        flagidx <- which(boxcoxTransc$y==max(boxcoxTransc$y))
+        optlam <- boxcoxTransc$x[flagidx]
+        vec <- df[[col]]
+
+        transvec <- (vec^optlam-1)/optlam  #according to (4-34)#
+
+        # transformed data#
+        qqts <- qqnorm(transvec, main = paste("QQ - Plot: ", col))
+        cortrans <- cor(qqts$x, qqts$y)
+        
+        },
+        error = function(cond) {
+            message(paste("Data NOT transformed: ", col))
+            message("Here's the original error message:")
+            message(conditionMessage(cond))
+            # Choose a return value in case of error
+            qqts <- qqnorm(df[[col]], main = paste("QQ - Plot: ", col))
+            qqline(df[[col]], col='orange', lwd=2)
+            cortrans <- cor(qqts$x, qqts$y)
+            return(cortrans)
+        },
+        finally = {
+          if (round(cortrans, 2) >= round(critic[[2]], 3)){
+          normal <- append(normal, col)
+          qqline(transvec, col='blue', lwd=2)
+          print(paste('Data ', col, ' is Normally Distributed! with: ', round(cortrans,3)))
+          df_normal[[col]] <- transvec
+        } else {
+          not_normal <- append(not_normal, col)
+          qqline(transvec, col='orange', lwd=2)
+          print(paste('Data ', col, ' is NOT Normally Distributed! with: ',
+                      round(cortrans,3)))
+        } 
+      }
+    )
+}
+```
+
+```{r}
+unique(df$citric.acid)
+```
+
+```{r}
+df_norm <- df_normal[normal]
+pairs(df_norm)
+```
+
+```{r}
+DensityPlots(df_norm)
+```
+
+```{r}
+chiforbi <- FindcrikChi(n, 2)
+
+BivariateQQ <- function(data_set){
+  for (col in names(data_set)){
+    for ( i in 1:ncol(data_set)){
+      if (col != names(data_set[i])){
+        dat <- c(col, names(data_set[i]))
+        X <- (data_set[dat])
+        mu <- colMeans(data_set[dat])
+        S <- cov(data_set[dat])
+        
+        result <- c() 
+        tryCatch(
+        {
+          for (row in 1:nrow(X)){
+            v <- as.matrix(X[row,])
+            result[row] <- mahalanobis(v, mu, S)
+            #result[row] <- (v-mu)%*%solve(S)%*%t(v-mu)
+            y <- sort(result)
+            # The second parameter is now '2' 
+            # because we have only two variables (bivariate)
+            x <- qchisq(1:length(result)/(length(result)+1), 2)
+          }
+          plot(x, y) 
+          if (round(cor(x, y),2) >=  round(chiforbi[[2]],3)){
+            abline(0,1, col='blue', lwd=2)
+            print(paste(col, ' vs ', names(data_set[i]), 
+                      ' is Normally Distributed! with: ', round(cor(x, y),3)))
+          } else {
+            abline(0,1, col='orange', lwd=2)
+            print(paste(col, ' vs ', names(data_set[i]), 
+                      ' is NOT Normally Distributed! with: ', round(cor(x, y),3)))
+          }
+        },
+        error = function(cond) {
+            message(paste("Data NOT calculated: ", col, names(data_set[i])))
+            message("Here's the original error message:")
+            message(conditionMessage(cond))
+            # Choose a return value in case of error
+            NA
+        })
+      }    
+    }
+  }
+}
+```
+
+```{r}
+round(chiforbi[[2]],3)
+BivariateQQ(df_norm)
+```
+
+## Data is NO normally distributed
+
+### Logistic regression model
+
+```{r}
+df_norm$y <- with(data, ifelse(label == 'great', 2, 
+                         ifelse(label == 'good', 1, 0)))
+```
+
+```{r}
+model <- lm(y ~ ., data=df_norm)
+summary(model)
+
+values <- model$fitted.values
+```
+```{r}
+coef(model)
+confint(model)
+summary(model)$coef[,4] # to access the p-values
+```
+
+```{r}
+plot(model, pch=df_norm$y)
+```
+
+```{r}
+predict(model, df_norm[15:25, ], interval="confidence")
+```
+```{r}
+plot(predict(model), residuals(model), pch=df_norm$y) # residuals vs. fitted values
+plot(predict(model), rstudent(model), pch=df_norm$y) # studentized residuals vs. fitted valuse
+plot(hatvalues(model), pch=df_norm$y)
+```
+```{r}
+# Testing for Multicollinearity
+# vif(model)
+# Testing for Autocorrelation
+durbinWatsonTest(model)
+# Testing for Normality
+residuals <- model$residuals
+shapiro.test(residuals)
+```
+
+
+
+
+compute the apparent error rate
+
+```{r}
+multinomModel <- multinom(y ~ ., data=df_norm)  
+prlogi <- predict(multinomModel, df_norm) #nearly the same syntax#
+T5 <- table(y, prlogi)
+T5
+```
+```{r}
+nrow(df_norm[df_norm$y == 0, ])
+nrow(df_norm[df_norm$y == 1, ])
+nrow(df_norm[df_norm$y == 2, ])
+```
+
+
+
