@@ -512,6 +512,9 @@ corr_matrix <- cor(normalized)
 ggcorrplot(corr_matrix)
 
 #Now we make a pca
+pca <- prcomp(num_data, scale=T)
+summary(pca)
+
 data.pca <- princomp(corr_matrix)
 summary(data.pca)
 data.pca$loadings[, 1:2]
