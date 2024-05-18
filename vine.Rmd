@@ -26,7 +26,10 @@ library(ggcorrplot)
 library(ggpubr)
 
 library(VGAM)
+library("FactoMineR")
+library(factoextra)
 ```
+
 
 ```{r}
 set.seed(0)
@@ -376,7 +379,7 @@ test   <- subset(df2, sample == FALSE)
 ```
 
 
-### Logistic discrimination model
+### Logistic resgression model
 
 ```{r}
 multi_model <- multinom(label ~ ., data = train[, 1:12])
@@ -541,4 +544,12 @@ plot2 <- ggplot(reduced_data, aes(x = Comp.1, y = Comp.2, colour = predicted)) +
 
 plot1
 plot2
+```
+```{r}
+fviz_eig(data.pca, addlabels = TRUE)
+fviz_pca_var(data.pca, col.var = "black")
+fviz_cos2(data.pca, choice = "var", axes = 1:2)
+fviz_pca_var(data.pca, col.var = "cos2",
+            gradient.cols = c("black", "orange", "green"),
+            repel = TRUE)
 ```
