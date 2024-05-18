@@ -15,10 +15,21 @@ library(ggExtra)
 library(MASS)
 library(car)
 library(nnet)
+library(caret)
+
+library(caTools)
+library(rstatix)
+library(Metrics)
+library(pROC)
+library(corrr)
+library(ggcorrplot)
+library(ggpubr)
+
+library(VGAM)
 ```
 
-
 ```{r}
+set.seed(0)
 data <- read.table('winequality-red.csv', sep=",", header=T, stringsAsFactors=T)
 ```
 
@@ -47,11 +58,13 @@ unique(data$quality)
 ```{r}
 data$label <- with(data, ifelse(quality >= 7, 'great', 
                          ifelse(quality >= 5, 'good', 'poor')))
+data$y <- with(data, ifelse(quality >= 7, 1, 0))
 ```
 
 ```{r}
 df <- data[,1:11]
 cat <- data[,13]
+lab <- data[,14]
 ```
 
 ```{r}
@@ -88,10 +101,10 @@ FindcrikChi <- function(n, p, alpha=0.5, N=1000){
 	result <- list(cN, cricvalue, scricvec)
 	return(result)
 }
-
-critic <- FindcrikChi(n, p-1)
 ```
+
 ```{r}
+critic <- FindcrikChi(n, p-1)
 critic[[2]]
 ```
 
@@ -103,7 +116,7 @@ DensityPlots <- function(data_set){
     qqc <- qqnorm(data_set[[col]], main = paste("QQ - Plot: ", col))
     corqq <- cor(qqc$x, qqc$y) 
   
-    if (round(corqq,3) >= round(critic[[2]],3)){
+    if (round(corqq,2) >= round(critic[[2]],3)){
       qqline(data_set[[col]], col='blue', lwd=2)
       print(paste('Data ', col, ' is Normally Distributed! with: ', round(corqq,3)))
     } else {
@@ -197,12 +210,46 @@ unique(df$citric.acid)
 
 ```{r}
 df_norm <- df_normal[normal]
+df_norm <- within(df_norm,  rm('citric.acid'))
 pairs(df_norm)
 ```
 
 ```{r}
 DensityPlots(df_norm)
 ```
+
+```{r}
+df_to_scale <- df[not_normal]
+df_to_scale$citric.acid <- df$citric.acid
+
+scale_data <- as.data.frame(scale(df_to_scale))
+pairs(scale_data)
+DensityPlots(scale_data)
+```
+
+```{r}
+log_scale <- log(df_to_scale)
+pairs(log_scale)
+DensityPlots(log_scale)
+```
+
+```{r}
+process <- preProcess(df_to_scale, method=c("range"))
+norm_scale <- predict(process, df_to_scale)
+pairs(norm_scale)
+DensityPlots(norm_scale)
+```
+
+```{r}
+df_stndardized <- df_to_scale
+for (col in names(df_to_scale)){
+  df_stndardized[[col]] <- (df_to_scale[[col]] - mean(df_to_scale[[col]])) / sd(df_to_scale[[col]])
+}
+
+pairs(df_stndardized)
+DensityPlots(df_stndardized)
+```
+
 
 ```{r}
 chiforbi <- FindcrikChi(n, 2)
@@ -259,63 +306,236 @@ BivariateQQ(df_norm)
 
 ## Data is NO normally distributed
 
-### Logistic regression model
+
+### Homogenity Check
 
 ```{r}
-df_norm$y <- with(data, ifelse(label == 'great', 2, 
+df2 <- cbind(df_norm, df_to_scale, data[, 13:14])
+
+df_grate <- df2[df2$label=='great', ]
+df_good <- df2[df2$label=='good', ]
+df_poor <- df2[df2$label=='poor', ]
+df_1 <- df2[df2$y== 1, ]
+df_0 <- df2[df2$y== 0, ]
+```
+
+Trying to calculate Box's M Test manually
+```{r}
+n1 <- nrow(df_grate)
+n2 <- nrow(df_good)
+n3 <- nrow(df_poor)
+n4 <- nrow(df_1)
+n5 <- nrow(df_0)
+
+m1 <- colMeans(df_grate[,1:11])
+m2 <- colMeans(df_good[,1:11])
+m3 <- colMeans(df_poor[,1:11])
+m4 <- colMeans(df_1[,1:11])
+m5 <- colMeans(df_0[,1:11])
+
+s1 <- cov(df_grate[,1:11])
+s2 <- cov(df_good[,1:11])
+s3 <- cov(df_poor[,1:11])
+s4 <- cov(df_1[,1:11])
+s5 <- cov(df_0[,1:11])
+```
+
+
+```{r}
+sp <- ((n1-1)*s1+(n2-1)*s2+(n3-1)*s3)/(n1+n2+n3-3) #Spooled is HERE#
+spi <- solve(sp)
+spi
+
+sp_2 <- ((n4-1)*s4+(n5-1)*s5)/(n4+n5-2) #Spooled is HERE#
+spi_2 <- solve(sp_2)
+spi_2
+```
+
+```{r}
+box_m(df2[,1:11],df2[,"label"])
+```
+```{r}
+box_m(df2[,1:11],df2[,"y"])
+```
+
+## Data is NO homogenious
+
+
+### Split data
+
+```{r}
+df2$label <- with(df2, ifelse(label == 'great', 2, 
                          ifelse(label == 'good', 1, 0)))
 ```
 
 ```{r}
-model <- lm(y ~ ., data=df_norm)
-summary(model)
+sample <- sample.split(df2, SplitRatio = 0.7)
 
-values <- model$fitted.values
+train  <- subset(df2, sample == TRUE)
+test   <- subset(df2, sample == FALSE)
 ```
-```{r}
-coef(model)
-confint(model)
-summary(model)$coef[,4] # to access the p-values
-```
+
+
+### Logistic discrimination model
 
 ```{r}
-plot(model, pch=df_norm$y)
+multi_model <- multinom(label ~ ., data = train[, 1:12])
+pred_multi <- predict(multi_model, newdata = test[, 1:12], type = "class")
+correct_predictions <- sum(pred_multi == test$label)
+correct_predictions
 ```
 
 ```{r}
-predict(model, df_norm[15:25, ], interval="confidence")
+xtab <- table(pred_multi, test$label)
+cm <- caret::confusionMatrix(xtab)
+cm
 ```
-```{r}
-plot(predict(model), residuals(model), pch=df_norm$y) # residuals vs. fitted values
-plot(predict(model), rstudent(model), pch=df_norm$y) # studentized residuals vs. fitted valuse
-plot(hatvalues(model), pch=df_norm$y)
-```
-```{r}
-# Testing for Multicollinearity
-# vif(model)
-# Testing for Autocorrelation
-durbinWatsonTest(model)
-# Testing for Normality
-residuals <- model$residuals
-shapiro.test(residuals)
-```
-
-
-
-
-compute the apparent error rate
 
 ```{r}
-multinomModel <- multinom(y ~ ., data=df_norm)  
-prlogi <- predict(multinomModel, df_norm) #nearly the same syntax#
-T5 <- table(y, prlogi)
-T5
+# Accuracy = TP / TOTAL
+print(paste('Accuracy: ', (397 + 21) / 492 ))
+
+# Recall = TP / (TP + FN)
+Metrics::recall(pred_multi, test$label)
+ 
+# Precision = TP / (TP + FP)
+Metrics::precision(pred_multi, test$label)
+ 
+# F1 = 2 * (Precision * Recall) / (Precision + Recall)
+Metrics::f1(pred_multi, test$label)
+```
+
+```{r}
+#𝐸(APER)
+aer(test$label, pred_multi)
+```
+
+```{r}
+model_3 <- lm(label ~ ., data=train[, 1:12])
+summary(model_3)
 ```
 ```{r}
-nrow(df_norm[df_norm$y == 0, ])
-nrow(df_norm[df_norm$y == 1, ])
-nrow(df_norm[df_norm$y == 2, ])
+plot(model_3, pch=df2$label)
+```
+
+```{r}
+pred_train_3 <- predict(model_3, train[, 1:12], type="response")
+pred_test_3 <- predict(model_3, newdata = test[, 1:12], type="response")
+```
+
+```{r}
+train_TAB <- table(train$label, pred_train_3 > 0.95)
+train_TAB
+test_TAB <- table(test$label, pred_test_3 > 0.95)
+test_TAB
+```
+```{r}
+model_binorm <- glm(y ~., data = train[, -12], family = binomial)
+predictions <- predict(model_binorm, newdata = test[, -12], type = "response")
+predicted_classes <- ifelse(predictions > 0.5, 0, 1)
+mean(predicted_classes == test$y)
+```
+
+```{r}
+xtab <- table(predicted_classes, test$y)
+cm <- caret::confusionMatrix(xtab)
+cm
 ```
 
 
+```{r}
+# Accuracy = TP / TOTAL
+print(paste('Accuracy: ', (5 + 46) / 492 ))
 
+# Recall = TP / (TP + FN)
+Metrics::recall(predicted_classes, test$y)
+ 
+# Precision = TP / (TP + FP)
+Metrics::precision(predicted_classes, test$y)
+ 
+# F1 = 2 * (Precision * Recall) / (Precision + Recall)
+Metrics::f1(predicted_classes, test$y)
+
+#𝐸(APER)
+aer(test$y, predicted_classes)
+```
+
+```{r}
+#ROC -curve
+roc_curve <- roc(ifelse(test$y == 0, 1, 0), ifelse(predicted_classes == 0, 1, 0))
+# Plot ROC curve
+plot(roc_curve, main = "ROC Curve", col = "blue")
+```
+
+```{r}
+fit <- vglm(label~., family=multinomial, data=train[, 1:12])
+summary(fit)
+probabilities <- predict(fit, test[,1:12], type="response")
+predictions <- apply(probabilities, 1, which.max)
+predictions[which(predictions==0)] <- test$label == 0
+predictions[which(predictions==1)] <- test$label == 1
+predictions[which(predictions==3)] <- test$label == 2
+# summarize accuracy
+xtab_v <- table(predictions, test$label)
+```
+```{r}
+cm <- caret::confusionMatrix(xtab_v)
+cm
+```
+
+```{r}
+# Accuracy = TP / TOTAL
+print(paste('Accuracy: ', 47 / 492 ))
+
+# Recall = TP / (TP + FN)
+Metrics::recall(predictions, test$labeæ)
+ 
+# Precision = TP / (TP + FP)
+Metrics::precision(predictions, test$label)
+ 
+# F1 = 2 * (Precision * Recall) / (Precision + Recall)
+Metrics::f1(predictions, test$label)
+
+#𝐸(APER)
+aer(test$label, predictions)
+```
+
+
+### PCA
+
+```{r}
+num_data <- df2[, 1:11]
+normalized <- scale(num_data)
+
+#After that we create a correlation matrix
+corr_matrix <- cor(normalized)
+ggcorrplot(corr_matrix)
+
+#Now we make a pca
+data.pca <- princomp(corr_matrix)
+summary(data.pca)
+data.pca$loadings[, 1:2]
+
+
+pca_1_2 <-data.pca$loadings[, 1:2]
+pca_1_2<-as.matrix(pca_1_2)
+numerical_data<-as.matrix(num_data)
+
+#we multiply the numerical_data with our first and second pricipal components 
+
+reduced_data<-numerical_data %*% pca_1_2
+reduced_data<-as.data.frame(reduced_data)
+reduced_data$predicted <- pred_multi <- predict(multi_model, 
+                                                newdata = df2[, 1:12], type = "class")
+reduced_data$true_class <- df2$label
+
+
+plot1 <- ggplot(reduced_data, aes(x = Comp.1, y = Comp.2, colour = true_class)) +
+  geom_point()
+
+plot2 <- ggplot(reduced_data, aes(x = Comp.1, y = Comp.2, colour = predicted)) +
+  geom_point()
+
+plot1
+plot2
+```
