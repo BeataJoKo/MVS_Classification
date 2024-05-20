@@ -114,9 +114,10 @@ LR_model <- glm(grade ~., data = train.data, family = binomial)
 
 predictions <- predict(LR_model, newdata = test.data, type = "response")
 
-predicted_classes <- ifelse(predictions > 0.5, "Not great", "Great")
-
 mean(predicted_classes == test.data$grade)
+###
+
+
 
 
 #ROC -curve
@@ -129,10 +130,11 @@ roc_curve <- roc(ifelse(test.data$grade == "Not great", 1, 0), ifelse(predicted_
 plot(roc_curve, main = "ROC Curve", col = "blue")
 
 
-#Check for sensitivity and other interesting parameters.
-predictions <- predict(LR_model, newdata = dfc, type = "response")
+#Check for sensitivity and other interesting parameters using LDA.
+predictions <- LDA_model %>% predict(dfc) 
 
-predicted_classes <- ifelse(predictions > 0.5, "Not great", "Great")
+
+predicted_classes <-predictions[["class"]]
 
 dfc$predicted <-predicted_classes 
 dfc$predicted <- as.factor(dfc$predicted)
