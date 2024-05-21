@@ -106,7 +106,7 @@ def BestParams(X_tr, X_te, y_tr, y_te):
         for key in parameters.keys():
             if name in key:
                 print(key)
-                cv = GridSearchCV(pipeline, param_grid={key : parameters[key]}, scoring = 'recall_micro')
+                cv = GridSearchCV(pipeline, param_grid={key : parameters[key]}, scoring = 'recall_macro')
                 cv.fit(X_tr, y_tr)
                 y_predict = cv.predict(X_te)
 
