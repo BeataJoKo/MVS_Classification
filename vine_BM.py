@@ -60,11 +60,20 @@ X = df.drop(['quality', 'color', 'type', 'y'], axis=1).values
 y_color = df['color'].values
 y_type = df['type'].values
 y_quality = df['y'].values
+X_qc = df.drop(['quality', 'type', 'y'], axis=1).values
+X_qc[:,11] = [1 if x == 'red' else 0 for x in X_qc[:,11]]
+X_red = X_qc[X_qc[:,11] == 1][:, :11]
+X_white = X_qc[X_qc[:,11] == 0][:, :11]
+y_red = y_quality[:1599:]
+y_white = y_quality[1599:]
 
 #%%  Train and Test
 X_train_c, X_test_c, y_train_c, y_test_c = train_test_split(X, y_color, test_size=0.2, random_state=123)
 X_train_t, X_test_t, y_train_t, y_test_t = train_test_split(X, y_type, test_size=0.2, random_state=123)
 X_train_q, X_test_q, y_train_q, y_test_q = train_test_split(X, y_quality, test_size=0.2, random_state=123)
+X_train_qc, X_test_qc, y_train_qc, y_test_qc = train_test_split(X_qc, y_quality, test_size=0.2, random_state=123)
+X_train_red, X_test_red, y_train_red, y_test_red = train_test_split(X_red, y_red, test_size=0.2, random_state=123)
+X_train_white, X_test_white, y_train_white, y_test_white = train_test_split(X_white, y_white, test_size=0.2, random_state=123)
 
 #%%
 models = {'KNN' : KNeighborsClassifier(),
@@ -92,12 +101,12 @@ def BestParams(X_tr, X_te, y_tr, y_te):
         steps = [('scaler', StandardScaler()), (name, model)]
         pipeline = Pipeline(steps)
         
-        optimal[name] = {'model': model, 'params': {}}
+        optimal[name] = {'model': None, 'params': {}}
         
         for key in parameters.keys():
             if name in key:
                 print(key)
-                cv = GridSearchCV(pipeline, param_grid={key : parameters[key]})
+                cv = GridSearchCV(pipeline, param_grid={key : parameters[key]}, scoring = 'recall_micro')
                 cv.fit(X_tr, y_tr)
                 y_predict = cv.predict(X_te)
 
@@ -105,8 +114,10 @@ def BestParams(X_tr, X_te, y_tr, y_te):
                 print(cv.best_params_)
                 
                 test_score = cv.score(X_te, y_te)
-                print('{} test set Accuracy: {}'.format(name, test_score))
+                # print('{} test set Accuracy: {}'.format(name, test_score))
+                print('{} test set Recall: {}'.format(name, test_score))
                 
+                optimal[name]['model'] = cv.best_estimator_
                 optimal[name]['params'].update(cv.best_params_)
                 
     return optimal
@@ -115,6 +126,9 @@ def BestParams(X_tr, X_te, y_tr, y_te):
 optimal_t = BestParams(X_train_t, X_test_t, y_train_t, y_test_t)
 optimal_c = BestParams(X_train_c, X_test_c, y_train_c, y_test_c)
 optimal_q = BestParams(X_train_q, X_test_q, y_train_q, y_test_q)
+optimal_qc = BestParams(X_train_qc, X_test_qc, y_train_qc, y_test_qc)
+optimal_red = BestParams(X_train_red, X_test_red, y_train_red, y_test_red)
+optimal_white = BestParams(X_train_white, X_test_white, y_train_white, y_test_white)
 
 #%%    
 def RunModels(X_tr, X_te, y_tr, y_te, options, title):
@@ -133,10 +147,12 @@ def RunModels(X_tr, X_te, y_tr, y_te, options, title):
             pipeline.fit(X_tr, y_tr)
             pipeline.score(X_tr, y_tr)
             options[name]['y'] = pipeline.predict(X_te)
+            options[name]['model'] = pipeline
         else:
             pipeline.fit(X_tr, y_tr)
             pipeline.score(X_tr, y_tr)
             options[name]['y'] = pipeline.predict(X_te)
+            options[name]['model'] = pipeline
             
         cv_result = cross_val_score(pipeline, X_tr, y_tr, cv=kf)
         results.append(cv_result)
@@ -149,9 +165,14 @@ def RunModels(X_tr, X_te, y_tr, y_te, options, title):
     return results
         
 #%%            
-results_t = RunModels(X_train_t, X_test_t, y_train_t, y_test_t, optimal_t, 'Wine Type')
+results_t = RunModels(X_train_t, X_test_t, y_train_t, y_test_t, optimal_t, 'Wine Type: great, good, poor')
 results_c = RunModels(X_train_c, X_test_c, y_train_c, y_test_c, optimal_c, 'Wine Color')
-results_q = RunModels(X_train_q, X_test_q, y_train_q, y_test_q, optimal_q, 'Wine Quality')
+results_q = RunModels(X_train_q, X_test_q, y_train_q, y_test_q, optimal_q, 'Wine Quality: great, bad')
+results_qc = RunModels(X_train_qc, X_test_qc, y_train_qc, y_test_qc, optimal_qc, 'Wine Quality with color: great, bad')
+results_rw = RunModels(X_train_red, X_test_white, y_train_red, y_test_white, optimal_red, 'Red Model: White Wine Quality')
+results_wr = RunModels(X_train_white, X_test_red, y_train_white, y_test_red, optimal_white, 'White Model: Red Wine Quality')
+results_red = RunModels(X_train_red, X_test_red, y_train_red, y_test_red, optimal_red, 'Red Wine Quality: great, bad')
+results_white = RunModels(X_train_white, X_test_white, y_train_white, y_test_white, optimal_white, 'White Wine Quality: great, bad')
 
 #%%
 def CrosTable(y_labels, y_data):
@@ -162,9 +183,9 @@ def CrosTable(y_labels, y_data):
 
 #%%
 def GetScores(y_te, y_pr):
+    accuracy = accuracy_score(y_te, y_pr)
     precision = precision_score(y_te, y_pr, average = "macro")
     recall = recall_score(y_te, y_pr, average = "macro")
-    accuracy = accuracy_score(y_te, y_pr)
     f1 = f1_score(y_te, y_pr, average = "macro")
     jaccard = jaccard_score(y_te, y_pr, average = "macro")
     
@@ -181,6 +202,11 @@ def GetScores(y_te, y_pr):
 df_scores_t = {}
 df_scores_c = {}
 df_scores_q = {}
+df_scores_qc = {}
+df_scores_red = {}
+df_scores_white = {}
+df_scores_rw = {}
+df_scores_wr = {}
 index = ["Accuracy", "Precision", "Recall", "F1", "Jaccard", "Average"]
 
 for name in models.keys():
@@ -190,6 +216,25 @@ for name in models.keys():
     cm_c, df_scores_c[name] = GetScores(y_test_c, optimal_c[name]['y'])
     CrosTable(optimal_q[name]['y'], y_test_q)
     cm_q, df_scores_q[name] = GetScores(y_test_q, optimal_q[name]['y'])
+    
+    CrosTable(optimal_qc[name]['y'], y_test_qc)
+    cm_qc, df_scores_qc[name] = GetScores(y_test_qc, optimal_qc[name]['y'])
+    
+    CrosTable(optimal_red[name]['y'], y_test_red)
+    cm_red, df_scores_red[name] = GetScores(y_test_red, optimal_red[name]['y'])
+    CrosTable(optimal_white[name]['y'], y_test_white)
+    cm_white, df_scores_white[name] = GetScores(y_test_white, optimal_white[name]['y'])
+    
+    # Red Wine Model vs White Wine Data
+    model_red = optimal_red[name]['model']
+    y_pred_rw = model_red.predict(X_test_white)
+    CrosTable(y_pred_rw, y_test_white)
+    cm_rw, df_scores_rw[name] = GetScores(y_test_white, y_pred_rw)
+    # White Wine Model vs Red Wine Data
+    model_white = optimal_white[name]['model']
+    y_pred_wr = model_white.predict(X_test_red)
+    CrosTable(y_pred_wr, y_test_red)
+    cm_wr, df_scores_wr[name] = GetScores(y_test_red, y_pred_wr)
 
 df_scores_t = pd.DataFrame(df_scores_t, index=index)
 print(df_scores_t)
@@ -197,6 +242,18 @@ df_scores_c = pd.DataFrame(df_scores_c, index=index)
 print(df_scores_c)
 df_scores_q = pd.DataFrame(df_scores_q, index=index)
 print(df_scores_q)
+
+df_scores_qc = pd.DataFrame(df_scores_qc, index=index)
+print(df_scores_qc)
+df_scores_red = pd.DataFrame(df_scores_red, index=index)
+print(df_scores_red)
+df_scores_white = pd.DataFrame(df_scores_white, index=index)
+print(df_scores_white)
+
+df_scores_rw = pd.DataFrame(df_scores_rw, index=index)
+print(df_scores_rw)
+df_scores_wr = pd.DataFrame(df_scores_wr, index=index)
+print(df_scores_wr)
 
 #%% PCA
 scaler = StandardScaler()
@@ -232,15 +289,15 @@ pc_t = pca2.fit_transform(scaled_t)
 df_pca_t = pd.DataFrame(data = pc_t, columns = ["pc_1", "pc_2"])
 df_pca_t['RandomForest'] = optimal_t['RandomForest']['y']
 
-colors = ['blue' if value == 'great' else 'red' if value == 'poor' else 'yellow' for value in df_pca_t['RandomForest']]
+colors = ['#2B88BD' if value == 'great' else '#EB9D3F' if value == 'poor' else '#B5B1B1' for value in df_pca_t['RandomForest']]
 plt.scatter(df_pca_t['pc_1'], df_pca_t['pc_2'], c=colors, alpha=0.6) 
 plt.xlabel('PC 1')
 plt.ylabel('PC 2')
-plt.title('RandomForest for Type Classification')
+plt.title('RandomForest for Type: great, good, poor')
 legend_elements = [
-    plt.Line2D([0], [0], marker='o', color='w', label='Good', markerfacecolor='yellow', markersize=8),
-    plt.Line2D([0], [0], marker='o', color='w', label='Great', markerfacecolor='blue', markersize=8),
-    plt.Line2D([0], [0], marker='o', color='w', label='Poor', markerfacecolor='red', markersize=8)
+    plt.Line2D([0], [0], marker='o', color='w', label='Good', markerfacecolor='#B5B1B1', markersize=8),
+    plt.Line2D([0], [0], marker='o', color='w', label='Great', markerfacecolor='#2B88BD', markersize=8),
+    plt.Line2D([0], [0], marker='o', color='w', label='Poor', markerfacecolor='#EB9D3F', markersize=8)
 ]
 plt.legend(handles=legend_elements)
 plt.show()
@@ -256,7 +313,7 @@ colors = ['#722f37' if value == 'red' else '#f9e8c0' for value in df_pca_c['SVC'
 plt.scatter(df_pca_c['pc_1'], df_pca_c['pc_2'], c=colors, alpha=0.6) 
 plt.xlabel('PC 1')
 plt.ylabel('PC 2')
-plt.title('SVC for Color Classification')
+plt.title('SVC for Color')
 legend_elements = [
     plt.Line2D([0], [0], marker='o', color='w', label='Red', markerfacecolor='#722f37', markersize=8),
     plt.Line2D([0], [0], marker='o', color='w', label='White', markerfacecolor='#f9e8c0', markersize=8),
@@ -271,14 +328,94 @@ pc_q = pca2.fit_transform(scaled_q)
 df_pca_q = pd.DataFrame(data = pc_q, columns = ["pc_1", "pc_2"])
 df_pca_q['RandomForest'] = optimal_q['RandomForest']['y']
 
-colors = ['green' if value == 1 else 'red' for value in df_pca_q['RandomForest']]
+colors = ['#2B88BD' if value == 1 else '#EB9D3F' for value in df_pca_q['RandomForest']]
 plt.scatter(df_pca_q['pc_1'], df_pca_q['pc_2'], c=colors, alpha=0.6) 
 plt.xlabel('PC 1')
 plt.ylabel('PC 2')
-plt.title('RandomForest for Quality Classification')
+plt.title('RandomForest for Quality: great, bad')
 legend_elements = [
-    plt.Line2D([0], [0], marker='o', color='w', label='Great', markerfacecolor='green', markersize=8),
-    plt.Line2D([0], [0], marker='o', color='w', label='Bad', markerfacecolor='red', markersize=8),
+    plt.Line2D([0], [0], marker='o', color='w', label='Great', markerfacecolor='#2B88BD', markersize=8),
+    plt.Line2D([0], [0], marker='o', color='w', label='Bad', markerfacecolor='#EB9D3F', markersize=8),
+]
+plt.legend(handles=legend_elements)
+plt.show()
+
+#%% PCA Quality and Color
+scaled_qc = scaler.fit_transform(X_test_qc)
+pc_qc = pca2.fit_transform(scaled_qc)
+
+colors = ['#2B88BD' if value == 1 else '#EB9D3F' for value in optimal_qc['RandomForest']['y']]
+plt.scatter(pc_qc[:, 0], pc_qc[:, 1], c=colors, alpha=0.6)
+plt.xlabel('PC 1')
+plt.ylabel('PC 2')
+plt.title('RandomForest Quality with color data: great, bad')
+legend_elements = [
+    plt.Line2D([0], [0], marker='o', color='w', label='Great', markerfacecolor='#2B88BD', markersize=8),
+    plt.Line2D([0], [0], marker='o', color='w', label='Bad', markerfacecolor='#EB9D3F', markersize=8),
+]
+plt.legend(handles=legend_elements)
+plt.show()
+
+#%% PCA Quality Red Wine
+scaled_red = scaler.fit_transform(X_test_red)
+pc_red = pca2.fit_transform(scaled_red)
+
+colors = ['#722f37' if value == 1 else '#B5B1B1' for value in optimal_red['RandomForest']['y']]
+plt.scatter(pc_red[:, 0], pc_red[:, 1], c=colors, alpha=0.6)
+plt.xlabel('PC 1')
+plt.ylabel('PC 2')
+plt.title('RandomForest Red Wine Quality')
+legend_elements = [
+    plt.Line2D([0], [0], marker='o', color='w', label='Great', markerfacecolor='#722f37', markersize=8),
+    plt.Line2D([0], [0], marker='o', color='w', label='Bad', markerfacecolor='#B5B1B1', markersize=8),
+]
+plt.legend(handles=legend_elements)
+plt.show()
+
+#%% PCA Quality White Wine
+scaled_white = scaler.fit_transform(X_test_white)
+pc_white = pca2.fit_transform(scaled_white)
+
+colors = ['#f9e8c0' if value == 1 else '#B5B1B1' for value in optimal_white['RandomForest']['y']]
+plt.scatter(pc_white[:, 0], pc_white[:, 1], c=colors, alpha=0.6)
+plt.xlabel('PC 1')
+plt.ylabel('PC 2')
+plt.title('RandomForest White Wine Quality')
+legend_elements = [
+    plt.Line2D([0], [0], marker='o', color='w', label='Great', markerfacecolor='#f9e8c0', markersize=8),
+    plt.Line2D([0], [0], marker='o', color='w', label='Bad', markerfacecolor='#B5B1B1', markersize=8),
+]
+plt.legend(handles=legend_elements)
+plt.show()
+
+#%% PCA Quality Red Model vs White Wine
+model_red = optimal_red['NET']['model']
+y_pred_rw = model_white.predict(X_test_white)
+
+colors = ['#f9e8c0' if value == 1 else '#B5B1B1' for value in y_pred_rw]
+plt.scatter(pc_white[:, 0], pc_white[:, 1], c=colors, alpha=0.6)
+plt.xlabel('PC 1')
+plt.ylabel('PC 2')
+plt.title('NET Red Model vs White Wine Data')
+legend_elements = [
+    plt.Line2D([0], [0], marker='o', color='w', label='Great', markerfacecolor='#f9e8c0', markersize=8),
+    plt.Line2D([0], [0], marker='o', color='w', label='Bad', markerfacecolor='#B5B1B1', markersize=8),
+]
+plt.legend(handles=legend_elements)
+plt.show()
+
+#%% PCA Quality White Model vs Red Wine
+model_white = optimal_white['SVC']['model']
+y_pred_wr = model_white.predict(X_test_red)
+
+colors = ['#722f37' if value == 1 else '#B5B1B1' for value in y_pred_wr]
+plt.scatter(pc_red[:, 0], pc_red[:, 1], c=colors, alpha=0.6)
+plt.xlabel('PC 1')
+plt.ylabel('PC 2')
+plt.title('SVC White Model vs Red Wine Data')
+legend_elements = [
+    plt.Line2D([0], [0], marker='o', color='w', label='Great', markerfacecolor='#722f37', markersize=8),
+    plt.Line2D([0], [0], marker='o', color='w', label='Bad', markerfacecolor='#B5B1B1', markersize=8),
 ]
 plt.legend(handles=legend_elements)
 plt.show()
@@ -288,15 +425,15 @@ scaled = scaler.fit_transform(X)
 pc = pca2.fit_transform(scaled)
 
 # TYPE
-colors = ['blue' if value == 'great' else 'red' if value == 'poor' else 'yellow' for value in y_type]
+colors = ['#2B88BD' if value == 'great' else '#EB9D3F' if value == 'poor' else '#B5B1B1' for value in y_type]
 plt.scatter(pc[:, 0], pc[:, 1], c=colors, alpha=0.6)
 plt.xlabel('PC 1')
 plt.ylabel('PC 2')
-plt.title('Type')
+plt.title('Type: great, good, poor')
 legend_elements = [
-    plt.Line2D([0], [0], marker='o', color='w', label='Good', markerfacecolor='yellow', markersize=8),
-    plt.Line2D([0], [0], marker='o', color='w', label='Great', markerfacecolor='blue', markersize=8),
-    plt.Line2D([0], [0], marker='o', color='w', label='Poor', markerfacecolor='red', markersize=8)
+    plt.Line2D([0], [0], marker='o', color='w', label='Good', markerfacecolor='#B5B1B1', markersize=8),
+    plt.Line2D([0], [0], marker='o', color='w', label='Great', markerfacecolor='#2B88BD', markersize=8),
+    plt.Line2D([0], [0], marker='o', color='w', label='Poor', markerfacecolor='#EB9D3F', markersize=8)
 ]
 plt.legend(handles=legend_elements)
 plt.show()
@@ -306,7 +443,7 @@ colors = ['#722f37' if value == 'red' else '#f9e8c0' for value in y_color]
 plt.scatter(pc[:, 0], pc[:, 1], c=colors, alpha=0.6)
 plt.xlabel('PC 1')
 plt.ylabel('PC 2')
-plt.title('Color')
+plt.title('Color: red, white')
 legend_elements = [
     plt.Line2D([0], [0], marker='o', color='w', label='Red', markerfacecolor='#722f37', markersize=8),
     plt.Line2D([0], [0], marker='o', color='w', label='White', markerfacecolor='#f9e8c0', markersize=8),
@@ -315,26 +452,17 @@ plt.legend(handles=legend_elements)
 plt.show()
 
 # QUALITY
-colors = ['green' if value == 1 else 'red' for value in y_quality]
+colors = ['#2B88BD' if value == 1 else '#EB9D3F' for value in y_quality]
 plt.scatter(pc[:, 0], pc[:, 1], c=colors, alpha=0.6)
 plt.xlabel('PC 1')
 plt.ylabel('PC 2')
-plt.title('Quality')
+plt.title('Quality: great, bad')
 legend_elements = [
-    plt.Line2D([0], [0], marker='o', color='w', label='Great', markerfacecolor='green', markersize=8),
-    plt.Line2D([0], [0], marker='o', color='w', label='Bad', markerfacecolor='red', markersize=8),
+    plt.Line2D([0], [0], marker='o', color='w', label='Great', markerfacecolor='#2B88BD', markersize=8),
+    plt.Line2D([0], [0], marker='o', color='w', label='Bad', markerfacecolor='#EB9D3F', markersize=8),
 ]
 plt.legend(handles=legend_elements)
 plt.show()
 
 
-
-
-
-
-
-
-
-
-
-
+#%%
